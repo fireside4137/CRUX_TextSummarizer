@@ -1,5 +1,7 @@
 import os
 import re
+import gc
+import threading
 import torch
 from fastapi import FastAPI, Request, HTTPException
 from pydantic import BaseModel, Field
@@ -25,7 +27,7 @@ MAX_SUMMARY_LENGTH = int(os.getenv("MAX_SUMMARY_LENGTH", "100"))
 MIN_SUMMARY_LENGTH = int(os.getenv("MIN_SUMMARY_LENGTH", "10"))
 NUM_BEAMS = int(os.getenv("NUM_BEAMS", "1"))  # 1 = greedy decoding for fast CPU inference
 
-# Model & tokenizer loading: use local weights if present, otherwise download from Hugging Face
+# Model source selection: local directory if weights exist, otherwise Hugging Face hub
 LOCAL_MODEL_DIR = os.getenv("MODEL_PATH", "./saved_summary_model")
 has_local_weights = os.path.exists(LOCAL_MODEL_DIR) and (
     os.path.exists(os.path.join(LOCAL_MODEL_DIR, "model.safetensors"))
@@ -33,10 +35,46 @@ has_local_weights = os.path.exists(LOCAL_MODEL_DIR) and (
 )
 MODEL_SOURCE = LOCAL_MODEL_DIR if has_local_weights else "t5-small"
 
-tokenizer = T5Tokenizer.from_pretrained(MODEL_SOURCE)
-model = T5ForConditionalGeneration.from_pretrained(MODEL_SOURCE, low_cpu_mem_usage=True)
-model.to(device)
-model.eval()
+# Lazy-loaded model references to ensure instant boot and low memory footprint (<50MB on startup)
+_model = None
+_tokenizer = None
+_model_lock = threading.Lock()
+
+def get_model_and_tokenizer():
+    """
+    Thread-safe lazy loader for model and tokenizer.
+    Loads using bfloat16 to halve memory consumption (~120MB instead of 242MB),
+    preventing Out-of-Memory crashes on 512MB RAM cloud tiers.
+    """
+    global _model, _tokenizer
+    if _model is not None and _tokenizer is not None:
+        return _model, _tokenizer
+
+    with _model_lock:
+        if _model is None:
+            gc.collect()
+            tok = T5Tokenizer.from_pretrained(MODEL_SOURCE)
+
+            # Try loading in bfloat16 to halve memory; fallback to standard float32 if unsupported
+            try:
+                mod = T5ForConditionalGeneration.from_pretrained(
+                    MODEL_SOURCE,
+                    torch_dtype=torch.bfloat16,
+                    low_cpu_mem_usage=True
+                )
+            except Exception:
+                mod = T5ForConditionalGeneration.from_pretrained(
+                    MODEL_SOURCE,
+                    low_cpu_mem_usage=True
+                )
+
+            mod.to(device)
+            mod.eval()
+            _tokenizer = tok
+            _model = mod
+            gc.collect()
+
+    return _model, _tokenizer
 
 # Templating - to tell where the html file is present
 templates = Jinja2Templates(directory=".")
@@ -64,11 +102,13 @@ def summarize_dialogue(dialogue: str) -> str:
     if not cleaned:
         raise ValueError("Input text cannot be empty or solely whitespace/tags.")
 
+    model_inst, tokenizer_inst = get_model_and_tokenizer()
+
     # T5 models expect the task prefix 'summarize: ' for summarization
     prompt = f"summarize: {cleaned}"
 
     # Tokenize without full-length padding for fast single-sample inference
-    inputs = tokenizer(
+    inputs = tokenizer_inst(
         prompt,
         max_length=512,
         truncation=True,
@@ -76,7 +116,7 @@ def summarize_dialogue(dialogue: str) -> str:
     ).to(device)
 
     # Generate summary with fast greedy decoding (or configurable beam search)
-    targets = model.generate(
+    targets = model_inst.generate(
         input_ids=inputs["input_ids"],
         attention_mask=inputs["attention_mask"],
         max_length=MAX_SUMMARY_LENGTH,
@@ -89,7 +129,7 @@ def summarize_dialogue(dialogue: str) -> str:
     )
 
     # Decode generated token IDs to text
-    summary = tokenizer.decode(targets[0], skip_special_tokens=True)
+    summary = tokenizer_inst.decode(targets[0], skip_special_tokens=True)
     return summary
 
 
@@ -116,9 +156,14 @@ async def home(request: Request):
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return {"status": "healthy", "device": str(device)}
+    return {
+        "status": "healthy",
+        "model_loaded": _model is not None,
+        "device": str(device)
+    }
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)
+
