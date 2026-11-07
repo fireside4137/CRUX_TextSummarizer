@@ -17,6 +17,13 @@ elif torch.cuda.is_available():
     device = torch.device("cuda")
 else:
     device = torch.device("cpu")
+    # Limit worker threads on CPU to avoid thread contention on cloud containers
+    torch.set_num_threads(int(os.getenv("TORCH_THREADS", "2")))
+
+# Model & generation settings configurable via environment variables
+MAX_SUMMARY_LENGTH = int(os.getenv("MAX_SUMMARY_LENGTH", "100"))
+MIN_SUMMARY_LENGTH = int(os.getenv("MIN_SUMMARY_LENGTH", "10"))
+NUM_BEAMS = int(os.getenv("NUM_BEAMS", "1"))  # 1 = greedy decoding for fast CPU inference
 
 # Model & tokenizer loading: use local weights if present, otherwise download from Hugging Face
 LOCAL_MODEL_DIR = os.getenv("MODEL_PATH", "./saved_summary_model")
@@ -27,7 +34,7 @@ has_local_weights = os.path.exists(LOCAL_MODEL_DIR) and (
 MODEL_SOURCE = LOCAL_MODEL_DIR if has_local_weights else "t5-small"
 
 tokenizer = T5Tokenizer.from_pretrained(MODEL_SOURCE)
-model = T5ForConditionalGeneration.from_pretrained(MODEL_SOURCE)
+model = T5ForConditionalGeneration.from_pretrained(MODEL_SOURCE, low_cpu_mem_usage=True)
 model.to(device)
 model.eval()
 
@@ -68,16 +75,17 @@ def summarize_dialogue(dialogue: str) -> str:
         return_tensors="pt"
     ).to(device)
 
-    # Generate summary with beam search
+    # Generate summary with fast greedy decoding (or configurable beam search)
     targets = model.generate(
         input_ids=inputs["input_ids"],
         attention_mask=inputs["attention_mask"],
-        max_length=150,
-        min_length=15,
-        num_beams=4,
+        max_length=MAX_SUMMARY_LENGTH,
+        min_length=MIN_SUMMARY_LENGTH,
+        num_beams=NUM_BEAMS,
+        do_sample=False,
         no_repeat_ngram_size=3,
-        length_penalty=2.0,
-        early_stopping=True
+        repetition_penalty=1.2,
+        early_stopping=True if NUM_BEAMS > 1 else False
     )
 
     # Decode generated token IDs to text
@@ -109,3 +117,8 @@ async def home(request: Request):
 @app.get("/health")
 def health():
     return {"status": "healthy", "device": str(device)}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)

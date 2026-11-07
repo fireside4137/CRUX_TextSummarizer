@@ -12,7 +12,7 @@
 
 ## Features
 
-- **Abstractive Summarization:** Uses Google's T5 architecture fine-tuned with beam search (`num_beams=4`, `length_penalty=2.0`, `no_repeat_ngram_size=3`) to generate coherent, fluent summaries.
+- **Abstractive Summarization:** Uses Google's T5 architecture with fast greedy decoding (`num_beams=1`, `repetition_penalty=1.2`, `no_repeat_ngram_size=3`) for rapid CPU inference, with configurable beam search support.
 - **Hardware Acceleration:** Automatically detects and utilizes **Apple Silicon GPU (`mps`)**, NVIDIA GPU (`cuda`), or gracefully falls back to **CPU**.
 - **Non-blocking Concurrency:** Machine learning inference is offloaded to worker threadpools, keeping the FastAPI event loop fully responsive for concurrent incoming requests.
 - **Optimized Inference:** Employs PyTorch's `@torch.inference_mode()` and dynamic tokenization to eliminate gradient overhead and unnecessary tensor padding.
@@ -136,6 +136,20 @@ Because model weight files (`*.safetensors`, `*.bin`) exceed GitHub's 100 MB upl
 
 - **Local Running:** If you already have weights inside `./saved_summary_model/model.safetensors`, the app detects and loads them locally.
 - **First-time Clone:** If no local weight file is found, the application automatically downloads the pre-trained `t5-small` weights from Hugging Face on the first run.
+
+---
+
+## Configuration
+
+You can customize generation speed, lengths, and model paths via environment variables or a `.env` file:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `NUM_BEAMS` | `1` | `1` for fast greedy search (~6–8s on CPU), `2`–`4` for beam search |
+| `MAX_SUMMARY_LENGTH` | `100` | Maximum token length for the summary |
+| `MIN_SUMMARY_LENGTH` | `10` | Minimum token length for the summary |
+| `MODEL_PATH` | `./saved_summary_model` | Local directory or Hugging Face model identifier |
+| `PORT` | `8000` | Port for the web server |
 
 ---
 
