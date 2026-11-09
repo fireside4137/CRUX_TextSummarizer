@@ -4,6 +4,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg)](https://fastapi.tiangolo.com/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C.svg)](https://pytorch.org/)
 [![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97-Transformers-orange.svg)](https://huggingface.co/)
+[![HuggingFace Model](https://img.shields.io/badge/%F0%9F%A4%97%20Model-fireside4137%2FText--Summarizer-yellow)](https://huggingface.co/fireside4137/Text-Summarizer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Crux** is a full-stack, transformer-powered text and dialogue summarization web application. Built on top of **Hugging Face's T5 (Text-to-Text Transfer Transformer)** and **FastAPI**, it provides fast, abstractive summarization through a clean, modern web interface and an open REST API.
@@ -12,16 +13,16 @@
 
 ## Features
 
-- **Abstractive Summarization:** Uses Google's T5 architecture with fast greedy decoding (`num_beams=1`, `repetition_penalty=1.2`, `no_repeat_ngram_size=3`) for rapid CPU inference, with configurable beam search support.
+- **Abstractive Summarization:** Uses Google's T5 architecture fine-tuned for dialogue and text summarization, with fast greedy decoding (`num_beams=1`, `repetition_penalty=1.2`, `no_repeat_ngram_size=3`) for rapid CPU inference and configurable beam search support.
 - **Hardware Acceleration:** Automatically detects and utilizes **Apple Silicon GPU (`mps`)**, NVIDIA GPU (`cuda`), or gracefully falls back to **CPU**.
 - **Non-blocking Concurrency:** Machine learning inference is offloaded to worker threadpools, keeping the FastAPI event loop fully responsive for concurrent incoming requests.
-- **Optimized Inference:** Employs PyTorch's `@torch.inference_mode()` and dynamic tokenization to eliminate gradient overhead and unnecessary tensor padding.
+- **Optimized Inference & Memory:** Employs PyTorch's `@torch.inference_mode()`, `torch.bfloat16`, dynamic tokenization, and lazy model loading to eliminate memory bloat and fit within strict cloud limits.
+- **Dual Model Serving:** Automatically uses local fine-tuned weights (`./saved_summary_model`) if present on disk, or pulls the fine-tuned model directly from Hugging Face Hub ([`fireside4137/Text-Summarizer`](https://huggingface.co/fireside4137/Text-Summarizer)) on cloud instances.
 - **Responsive UI:**
   - Live real-time character and word counters.
   - One-click "Copy Summary" button with visual feedback.
   - Keyboard shortcut support (`Ctrl/Cmd + Enter` to submit).
   - Clean animated loading state and styled error alerts.
-- **Automatic Model Fallback:** Seamlessly detects local model weights in `./saved_summary_model` or falls back to Hugging Face Hub (`t5-small`).
 - **Interactive API Documentation:** Auto-generated Swagger UI and OpenAPI documentation at `/docs`.
 
 ---
@@ -130,12 +131,17 @@ Once running, navigate to:
 
 ---
 
-## Model Weights Notice
+## Model Deployment Strategy: Local vs. Hugging Face Hub
 
-Because model weight files (`*.safetensors`, `*.bin`) exceed GitHub's 100 MB upload limit, heavy weights are excluded via `.gitignore`. 
+Because model weight files (`*.safetensors`, `*.bin`) exceed GitHub's 100 MB upload limit, heavy weights are excluded from Git via `.gitignore`. The architecture is decoupled to support two modes:
 
-- **Local Running:** If you already have weights inside `./saved_summary_model/model.safetensors`, the app detects and loads them locally.
-- **First-time Clone:** If no local weight file is found, the application automatically downloads the pre-trained `t5-small` weights from Hugging Face on the first run.
+1. **Local Fine-Tuned Weights (`./saved_summary_model`):**
+   - When developing locally on your machine, the application directly detects and loads `model.safetensors` from the local directory.
+   - Zero internet bandwidth required; loads instantaneously on startup.
+
+2. **Cloud Hub Weights ([`fireside4137/Text-Summarizer`](https://huggingface.co/fireside4137/Text-Summarizer)):**
+   - For cloud platforms (like Render) or first-time cloning on external machines where the local weights file is absent, the app automatically streams your fine-tuned weights from the **Hugging Face Model Hub**.
+   - Leverages `torch.bfloat16` and lazy loading to fit comfortably within 512MB RAM server tiers without triggering Out-of-Memory (OOM) crashes.
 
 ---
 

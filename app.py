@@ -27,13 +27,15 @@ MAX_SUMMARY_LENGTH = int(os.getenv("MAX_SUMMARY_LENGTH", "100"))
 MIN_SUMMARY_LENGTH = int(os.getenv("MIN_SUMMARY_LENGTH", "10"))
 NUM_BEAMS = int(os.getenv("NUM_BEAMS", "1"))  # 1 = greedy decoding for fast CPU inference
 
-# Model source selection: local directory if weights exist, otherwise Hugging Face hub
+# Model source selection: local directory if weights exist, otherwise Hugging Face model hub
 LOCAL_MODEL_DIR = os.getenv("MODEL_PATH", "./saved_summary_model")
 has_local_weights = os.path.exists(LOCAL_MODEL_DIR) and (
     os.path.exists(os.path.join(LOCAL_MODEL_DIR, "model.safetensors"))
     or os.path.exists(os.path.join(LOCAL_MODEL_DIR, "pytorch_model.bin"))
 )
-MODEL_SOURCE = LOCAL_MODEL_DIR if has_local_weights else "t5-small"
+# Uses local fine-tuned weights if present, otherwise downloads from our Hugging Face model repo
+HF_MODEL_REPO = "fireside4137/Text-Summarizer"
+MODEL_SOURCE = LOCAL_MODEL_DIR if has_local_weights else HF_MODEL_REPO
 
 # Lazy-loaded model references to ensure instant boot and low memory footprint (<50MB on startup)
 _model = None
